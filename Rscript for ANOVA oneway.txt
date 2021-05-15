@@ -1,0 +1,23 @@
+### Set directory for the input file
+
+>setwd("D:/Tomato Lab/Phan Thi Ngan/Program tutorials/ANOVA")
+
+### Load input file into R program
+
+>data <- read.table ("anova.txt", header=T)
+
+
+### Look at the data
+
+>data
+
+
+### Create an ANOVA table.If you want to compare between 2 replications of Trait1 you can type as below:
+
+>data2.aov <- aov(data$Trai1 ~ data$Rep)
+>summary(data2.aov)
+
+
+###Conduct a Tukey's multiple comparison procedure
+
+>TukeyHSD(data2.aov)
