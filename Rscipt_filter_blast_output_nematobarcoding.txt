@@ -1,0 +1,146 @@
+##Rscript to filter the blastn output from nematode amplicon barcoding 
+##Author: PHAN Thi Ngan #Email: ptngancnsh.tbf@gmail.com
+#Load library 
+library(dplyr)
+
+##set working directory to the folder you saved the blastn output
+
+setwd("D:/PLANET/ELISON/PAIRED-END/All/81_all")
+
+##load the blastn output
+
+blast_df <- read.table("Elison_81sp_all_blastn.tsv", sep = "\t", header = F, quote="", stringsAsFactors = FALSE)
+
+##Name the collumn of the blastn table
+blast_df <- blast_df %>% rename("Amplicon"=V1, "Subject_Taxonomy_ID"=V2, "Bit_score"=V3, "Query_accesion"=V4, "GenBank_accession"=V5, "Percentage_of_identical_matches"=V6,
+                                "alignment_length"=V7, "Number_of_mismatches"=V8, "number_of_gap_openings"=V9, "start_of_alignment_in_query"=V10, "end_of_alignment_in_query"=V11,
+                                "start_of_alignment_in_GenBank"=V12, "end_of_alignment_in_GenBank"=V13, "expect_value"=V14,
+                                "Scientific_name"=V15, "Super_Kingdom"=V16, "Subject_title"=V17, "Subject_length"=V18, "Amplicon_length"=V19, "Query_Coverage_Per_Subject"=V20, 
+                                "Query_Coverage_Per_HSP"=V21, "ppos"=V22)
+
+##Add the genus collumn based on the NCBI species name 
+blast_df <- blast_df %>% 
+  rowwise() %>% 
+  mutate(Genus= unlist(strsplit(gsub("cf. ", "", Scientific_name), " "))[1]) %>% 
+  group_by(Amplicon, Genus) %>% 
+  arrange(desc(Percentage_of_identical_matches)) %>% 
+  slice_head(n=1)
+
+##Filter blastn table 
+removed_genus <- c("Nematoda", "Nematodes", "uncultured", "unidentified", "invertebrate", "soil")
+removed_kingdom <- c("Bacteria", "N/A")
+
+blast_df <- blast_df %>% 
+  filter(Percentage_of_identical_matches > 97, Query_Coverage_Per_Subject > 90, !Genus %in% c(removed_genus),
+         !Super_Kingdom %in% c(removed_kingdom) )
+
+##Filter the soil-born nematode base on the Nemaplex list
+soil_nematode_nemaplex <- read.table("D:/PLANET/ELISON_19_samples_NF_706_HN00150041_05072021/Nematode_soil_food_web_Nemaplex.txt", header = T, sep = "\t", quote="", stringsAsFactors = FALSE )
+
+blast_df <- left_join(blast_df, soil_nematode_nemaplex, by="Genus")
+
+soil_nematode <- blast_df %>% group_by(Amplicon, Genus) %>%  filter(!Cp_class %in% c(NA)) %>% slice_head(n=1)
+
+soil_nematode_new_list_genus <-  soil_nematode %>% group_by(Amplicon) %>% summarise(Genus_list=paste(Genus,collapse = "/"), Amplicon=Amplicon)
+
+soil_nematode_new_list_genus <- soil_nematode_new_list_genus %>% group_by(Amplicon, Genus_list) %>% slice_head(n=1)
+
+write.table(soil_nematode_new_list_genus, "soil_nematode_new_list_genus.txt", sep = "\t", row.names = F, col.names = T)
+
+##Add in the read coverage table of all ASVs (output from QIIME) to the the soil-nematode list
+OTU_table <- read.table("table.from_biom.txt", header = T, sep = "\t", quote="", stringsAsFactors = FALSE)
+
+soil_nematode_list_SV_and_read <- left_join(soil_nematode_new_list_genus, OTU_table, by="Amplicon")
+
+write.table(soil_nematode_list_SV_and_read , "soil_nematode_list_SV_and_read .txt", sep = "\t", row.names = F, col.names = T)
+
+
+
+#Add the length of amplicon to the list of soil-nematode
+Length <- read.table("amplicon_length", header = T, sep = "\t", quote="", stringsAsFactors = FALSE)
+df2 <- left_join(soil_nematode_list_SV_and_read, Length, by="Amplicon")
+
+#Extract Genus list, amplicon, amplicon, and read coverage for each sample
+for (f in colnames(df2)) {
+  if (f %in% c("Genus_list", "Amplicon","Length")) next
+  f_list <- df2 %>% 
+    filter(if_any(matches(paste0(f, "$")), ~ (. > 9))) %>% 
+    dplyr::select(Genus_list,Amplicon, matches(paste0(f, "$")), Length) %>%
+    dplyr::arrange(across(matches(f), dplyr::desc)) %>%
+    rename_at(vars(matches(f)), ~ paste("Read_coverage"))
+  
+  write.table(f_list, file = paste0(f, ".txt"), row.names = F, sep = "\t", quote=F)
+}
+
+##Calculate min_max_mean of amplicon length for each sample
+path <- "D:/PLANET/ELISON/PAIRED-END/All/81_all/final_with_length"
+process_length <- function(path) {
+  length_folder <- list.files(path=path, pattern = ".txt", full.names = T)
+  
+  for (length_file in length_folder) {
+    length_table <- read.table(length_file, sep = "\t", allowEscapes = T, header = T, stringsAsFactors = FALSE)
+    
+    
+    len_stat <-  length_table %>%  summarise(Min_SV = min(Length), Max_SV = max(Length), Mean_SV = mean(Length)) %>% mutate(sample_name = basename(length_file))
+    if (length_file == length_folder[1]) {
+      all_len <- len_stat
+    } else {
+      all_len <- rbind(all_len, len_stat)
+    }
+    
+    file_statistic <- file.path(path, gsub(".txt", "_total_statistic.txt", basename(genus_file)))
+    write.table(all_len,  file.path(path, "all_total_SV_length.txt"), sep = "\t", row.names = F, col.names = T, quote = F)
+    
+    
+  }
+  cat("done!")
+}
+
+process_length(path)
+
+
+                                                                                                                   
+## Export the final list of genus and their abundance (# reads) for each sample                                                                                                                   
+path <- "D:/PLANET/ELISON/PAIRED-END/All/81_all/final"
+process_genus <- function(path) {
+  genus_folder <- list.files(path=path, pattern = ".txt", full.names = T)
+  
+  for (genus_file in genus_folder) {
+    cat(basename(genus_file))
+    genus_table <- read.table(genus_file, sep = "\t", header = T, stringsAsFactors = FALSE)
+    genus_table <-  genus_table %>% group_by(Genus_list) %>% summarise(Total_read_count = sum(Read_coverage)) %>%  arrange(desc(Total_read_count))
+
+    file_genus <- file.path(path, gsub(".txt", "_total_genus_count.txt", basename(genus_file)))
+    write.table(genus_table, file_genus, sep = "\t", quote=F, row.names = F, col.names = T)   
+  }
+  cat("done!")
+}
+
+process_genus(path)
+
+
+##count number of genus and total read count that map to soil-born nematode
+
+path <- "D:/PLANET/ELISON/PAIRED-END/All/81_all/final/total_genus_count"
+process_genus <- function(path) {
+  genus_folder <- list.files(path=path, pattern = "_total_genus_count.txt", full.names = T) 
+  for (genus_file in genus_folder) {
+    genus_table <- read.table(genus_file, sep = "\t", allowEscapes = T, header = T, stringsAsFactors = FALSE)
+
+    statistic <-  genus_table %>% summarise(no_row = n(), tota_read = sum(Total_read_count)) %>% mutate(sample_name = basename(genus_file))
+    if (genus_file == genus_folder[1]) {
+      all_stat <- statistic
+    } else {
+      all_stat <- rbind(all_stat, statistic)
+    }
+    
+    file_statistic <- file.path(path, gsub(".txt", "_total_staatistic.txt", basename(genus_file)))
+    write.table(all_stat,  file.path(path, "all_total_statistic.txt"), sep = "\t", row.names = F, col.names = T, quote = F)  
+  }
+  cat("done!")
+}
+
+process_genus(path)
+
+
+
